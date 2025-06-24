@@ -1,0 +1,221 @@
+---
+- name: Install Kubernetes v1.32.6 on all nodes
+  hosts: k8s_cluster
+  become: yes
+  vars:
+    k8s_version: "1.32"
+    k8s_exact_version: "1.32.6-1.1"
+    pod_network_cidr: "192.168.0.0/16"
+    calico_version: "v3.28.0"
+
+  tasks:
+    - name: Update system packages
+      apt:
+        update_cache: yes
+        upgrade: dist
+        
+    - name: Install required packages for Kubernetes repository
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gpg
+        state: present
+        update_cache: yes
+        
+    - name: Create keyrings directory
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+        
+    - name: Download and install Kubernetes GPG key
+      shell: |
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{ k8s_version }}/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        
+    - name: Add Kubernetes repository
+      lineinfile:
+        path: /etc/apt/sources.list.d/kubernetes.list
+        line: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ k8s_version }}/deb/ /"
+        create: yes
+        
+    - name: Update apt package index after adding Kubernetes repo
+      apt:
+        update_cache: yes
+
+    - name: Check if Kubernetes packages are available
+      shell: apt-cache search kubeadm
+      register: kubeadm_search
+      
+    - name: Display kubeadm search results
+      debug:
+        msg: "{{ kubeadm_search.stdout_lines }}"
+        
+    - name: Check available Kubernetes versions
+      shell: apt-cache madison kubelet kubeadm kubectl
+      register: available_versions
+      ignore_errors: yes
+      
+    - name: Display available versions
+      debug:
+        msg: "{{ available_versions.stdout_lines }}"
+      when: available_versions.rc == 0
+        
+    - name: Install specific Kubernetes packages version
+      apt:
+        name:
+          - "kubelet={{ k8s_exact_version }}"
+          - "kubeadm={{ k8s_exact_version }}"
+          - "kubectl={{ k8s_exact_version }}"
+        state: present
+        update_cache: yes
+
+    - name: Hold Kubernetes packages to prevent upgrades
+      dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop:
+        - kubelet
+        - kubeadm
+        - kubectl
+
+    - name: Install containerd
+      apt:
+        name: containerd
+        state: present
+        update_cache: yes
+        
+    - name: Create containerd config directory
+      file:
+        path: /etc/containerd
+        state: directory
+        mode: '0755'
+        
+    - name: Generate default containerd configuration
+      shell: containerd config default > /etc/containerd/config.toml
+      
+    - name: Configure containerd to use systemd cgroup driver
+      lineinfile:
+        path: /etc/containerd/config.toml
+        regexp: '^\s*SystemdCgroup\s*='
+        line: '            SystemdCgroup = true'
+        insertafter: '.*\[plugins\."io\.containerd\.grpc\.v1\.cri"\.containerd\.runtimes\.runc\.options\]'
+        
+    - name: Configure containerd to use correct pause image
+      lineinfile:
+        path: /etc/containerd/config.toml
+        regexp: '^\s*sandbox_image\s*='
+        line: '    sandbox_image = "registry.k8s.io/pause:3.10"'
+        insertafter: '.*\[plugins\."io\.containerd\.grpc\.v1\.cri"\]'
+
+    - name: Enable and start containerd
+      systemd:
+        name: containerd
+        enabled: yes
+        state: restarted
+
+    - name: Disable swap
+      shell: swapoff -a
+      
+    - name: Remove swap from fstab
+      lineinfile:
+        path: /etc/fstab
+        regexp: '.*swap.*'
+        state: absent
+
+    - name: Enable IP forwarding
+      sysctl:
+        name: net.ipv4.ip_forward
+        value: '1'
+        state: present
+        reload: yes
+
+    - name: Load required kernel modules
+      modprobe:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - overlay
+        - br_netfilter
+
+    - name: Make kernel modules persistent
+      lineinfile:
+        path: /etc/modules-load.d/k8s.conf
+        line: "{{ item }}"
+        create: yes
+      loop:
+        - overlay
+        - br_netfilter
+
+    - name: Configure sysctl for Kubernetes
+      sysctl:
+        name: "{{ item.key }}"
+        value: "{{ item.value }}"
+        state: present
+        reload: yes
+      loop:
+        - { key: 'net.bridge.bridge-nf-call-iptables', value: '1' }
+        - { key: 'net.bridge.bridge-nf-call-ip6tables', value: '1' }
+        - { key: 'net.ipv4.ip_forward', value: '1' }
+
+    - name: Create kubelet drop-in directory
+      file:
+        path: /etc/systemd/system/kubelet.service.d
+        state: directory
+        mode: '0755'
+
+    - name: Enable kubelet service (but don't start it yet)
+      systemd:
+        daemon_reload: yes
+        name: kubelet
+        enabled: yes
+
+    - name: Reboot all VMs to ensure clean state
+      reboot:
+        msg: "Rebooting to apply all Kubernetes configurations"
+        reboot_timeout: 300
+        connect_timeout: 5
+        
+    - name: Wait for VMs to come back online
+      wait_for_connection:
+        timeout: 300
+        delay: 30
+
+    - name: Verify services are running after reboot
+      systemd:
+        name: "{{ item }}"
+        state: started
+      loop:
+        - containerd
+        - kubelet
+      register: service_status
+      failed_when: false
+      
+    - name: Display service status
+      debug:
+        msg: "{{ item.name }} is {{ item.state }}"
+      loop: "{{ service_status.results }}"
+
+    - name: Display next steps
+      debug:
+        msg: |
+          Kubernetes {{ k8s_exact_version }} has been installed successfully and VMs rebooted!
+          
+          Next steps:
+          1. On master (c1), run:
+             sudo kubeadm init --apiserver-advertise-address={{ ansible_default_ipv4.address }} --apiserver-cert-extra-sans={{ ansible_default_ipv4.address }} --pod-network-cidr=192.168.0.0/16 --service-cidr=10.96.0.0/12 --kubernetes-version=v1.32.6
+          
+          2. Set up kubectl:
+             mkdir -p $HOME/.kube
+             sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+             sudo chown $(id -u):$(id -g) $HOME/.kube/config
+          
+          3. Install Calico:
+             kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.0/manifests/tigera-operator.yaml
+             curl https://raw.githubusercontent.com/projectcalico/calico/v3.28.0/manifests/custom-resources.yaml -O
+             kubectl apply -f custom-resources.yaml
+          
+          4. Join worker nodes using the command provided by kubeadm init
+          
+          Node {{ inventory_hostname }} configured to use public IP: {{ ansible_default_ipv4.address }}

@@ -1,0 +1,23 @@
+
+
+
+
+sudo kubeadm init --apiserver-advertise-address=172.16.0.10 \
+     --apiserver-cert-extra-sans=pv1.tarams.org,65.21.9.61 \
+     --pod-network-cidr=192.168.0.0/16 \
+     --service-cidr=10.96.0.0/12 \
+     --kubernetes-version=v1.32.6
+
+
+
+sudo kubeadm join 172.16.0.10:6443 --token 5z36f5.5ykc0p108iv54vw2 \
+	--discovery-token-ca-cert-hash sha256:cec2e8bbab6e29ff85d92111cb1a1e8e5209107e440331e61881963acd45ec2c
+
+
+
+kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.30.2/manifests/operator-crds.yaml
+kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.30.2/manifests/tigera-operator.yaml
+
+curl https://raw.githubusercontent.com/projectcalico/calico/v3.30.2/manifests/custom-resources.yaml -O
+
+kubectl create -f custom-resources.yaml
