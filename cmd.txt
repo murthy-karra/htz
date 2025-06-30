@@ -13,11 +13,38 @@ sudo kubeadm init --apiserver-advertise-address=172.16.0.10 \
 sudo kubeadm join 172.16.0.10:6443 --token 5z36f5.5ykc0p108iv54vw2 \
 	--discovery-token-ca-cert-hash sha256:cec2e8bbab6e29ff85d92111cb1a1e8e5209107e440331e61881963acd45ec2c
 
-
-
+#-----------------------------------------------------------------------------------------------------------------
+# Calico
 kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.30.2/manifests/operator-crds.yaml
 kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.30.2/manifests/tigera-operator.yaml
 
 curl https://raw.githubusercontent.com/projectcalico/calico/v3.30.2/manifests/custom-resources.yaml -O
 
 kubectl create -f custom-resources.yaml
+
+#-----------------------------------------------------------------------------------------------------------------
+
+
+
+#-----------------------------------------------------------------------------------------------------------------
+# Metrics Server
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+
+kubectl patch deployment metrics-server -n kube-system --type='json' -p='[
+  {
+    "op": "add",
+    "path": "/spec/template/spec/containers/0/args/-",
+    "value": "--kubelet-insecure-tls"
+  }
+]'
+#-----------------------------------------------------------------------------------------------------------------
+
+
+
+
+#-----------------------------------------------------------------------------------------------------------------
+# Longhorn
+# Istio
+# 
+
+#-----------------------------------------------------------------------------------------------------------------
