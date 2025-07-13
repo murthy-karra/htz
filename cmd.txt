@@ -2,12 +2,12 @@
 
 
 
-sudo kubeadm init --apiserver-advertise-address=172.16.0.10 \
-     --apiserver-cert-extra-sans=pv1.tarams.org,65.21.9.61 \
+sudo kubeadm init --apiserver-advertise-address=172.16.0.20 \
+     --apiserver-cert-extra-sans=k8s1.tarams.local \
      --pod-network-cidr=192.168.0.0/16 \
      --service-cidr=10.96.0.0/12 \
      --kubernetes-version=v1.32.6
-
+----------------------------------------------------------------
 
 
 sudo kubeadm join 172.16.0.10:6443 --token 5z36f5.5ykc0p108iv54vw2 \

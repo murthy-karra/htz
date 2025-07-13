@@ -6,11 +6,10 @@
 
 # VM Configuration
 declare -A VMS=(
-    ["110"]="c1:172.16.0.10:8192:4:no"      # Control plane: 8GB RAM, 4 CPU, no 2nd disk
-    ["111"]="w1:172.16.0.11:32768:8:yes"    # Worker 1: 32GB RAM, 8 CPU, 200GB 2nd disk
-    ["112"]="w2:172.16.0.12:32768:8:yes"    # Worker 2: 32GB RAM, 8 CPU, 200GB 2nd disk
-    ["113"]="w3:172.16.0.13:32768:8:yes"    # Worker 3: 32GB RAM, 8 CPU, 200GB 2nd disk
-    ["105"]="ha:172.16.0.5:8192:2:no"      # HA proxy: 8GB RAM, 2 CPU, no 2nd disk
+    ["120"]="k8s1-c1:172.16.0.20:8192:4:no"      # Control plane: 8GB RAM, 4 CPU, no 2nd disk
+    ["121"]="k8s1-w1:172.16.0.21:32768:8:yes"    # Worker 1: 32GB RAM, 8 CPU, 200GB 2nd disk
+    ["122"]="k8s1-w2:172.16.0.22:32768:8:yes"    # Worker 2: 32GB RAM, 8 CPU, 200GB 2nd disk
+    ["123"]="k8s1-w3:172.16.0.23:32768:8:yes"    # Worker 3: 32GB RAM, 8 CPU, 200GB 2nd disk
 )
 
 CLOUD_IMAGE="/var/lib/vz/vms/template/iso/debian-12-generic-amd64.qcow2"
@@ -148,7 +147,7 @@ EOF
     # Add second disk if required
     if [[ "$SECOND_DISK" == "yes" ]]; then
         echo "💾 Adding second SCSI disk (200GB)..."
-        qm set $VM_ID --scsi1 local-vms:200
+        qm set $VM_ID --scsi1 local-vms:100
         
         if [[ $? -eq 0 ]]; then
             echo "✅ Second disk (200GB) added as scsi1"
