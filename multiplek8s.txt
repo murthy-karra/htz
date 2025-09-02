@@ -1,8 +1,8 @@
-sudo kubeadm init --apiserver-advertise-address=172.16.0.20 \
-     --apiserver-cert-extra-sans=k8s1.tarams.org \
+sudo kubeadm init --apiserver-advertise-address=172.16.0.100 \
      --pod-network-cidr=192.168.0.0/16 \
      --service-cidr=10.96.0.0/12 \
      --kubernetes-version=v1.32.6
+     
 
 In case, you have a 2nd k8s cluster with dns of k8s1.tarams.org. 
 

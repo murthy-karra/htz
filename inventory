@@ -9,10 +9,21 @@ k8s_masters
 k8s_workers
 
 [k8s_masters]
-c1 ansible_host=172.16.0.30
+c1 ansible_host=172.16.0.100
+; c2 ansible_host=172.16.0.110
+; c3 ansible_host=172.16.0.120
+
 
 [k8s_workers]
-w1 ansible_host=172.16.0.31
-w2 ansible_host=172.16.0.32
-w3 ansible_host=172.16.0.33
+w1 ansible_host=172.16.0.101
+w2 ansible_host=172.16.0.102
+w3 ansible_host=172.16.0.103
+; w4 ansible_host=172.16.0.111
+; w5 ansible_host=172.16.0.112
+; w6 ansible_host=172.16.0.113
+; w7 ansible_host=172.16.0.121
+; w8 ansible_host=172.16.0.122
+; w9 ansible_host=172.16.0.123
+
+
 
