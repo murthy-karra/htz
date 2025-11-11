@@ -1,0 +1,105 @@
+# Download Longhornctl on control node
+
+wget https://github.com/longhorn/cli/releases/download/v1.10.0/longhornctl-linux-amd64
+chmod +x longhornctl-linux-amd64
+mv longhornctl-linux-amd64 longhornctl
+
+export KUBECONFIG=~/.kube/config
+
+kubectl create ns longhorn-system
+
+./longhornctl check preflight
+
+Runs pods on each node to check
+
+./longhornctl install preflight
+
+#-------------------------------------------------------
+
+# List all disks by ID
+ls -la /dev/disk/by-id/
+
+# Show which IDs map to which devices
+ls -la /dev/disk/by-id/ | grep -E 'ata-|scsi-|nvme-' | grep -v part
+
+# Check which disks are empty (no filesystem)
+for disk in /dev/disk/by-id/ata-* /dev/disk/by-id/scsi-*; do
+    if [ -b "$disk" ] && ! echo "$disk" | grep -q "part"; then
+        echo "Checking $disk -> $(readlink -f $disk)"
+        sudo blkid "$disk" 2>/dev/null || echo "  ^ This disk appears empty"
+    fi
+done
+#--------------------------------------------
+# Example: if your blank disk ID is ata-VBOX_HARDDISK_VB12345678-1234
+DISK_ID="scsi-0QEMU_QEMU_HARDDISK_drive-scsi1"  # Replace with your actual disk ID
+MOUNT_PATH="/mnt/longhorn-disk"
+
+# Format the disk
+sudo mkfs.ext4 -L longhorn-data "/dev/disk/by-id/$DISK_ID"
+
+# Create mount point
+sudo mkdir -p $MOUNT_PATH
+
+# Mount the disk
+sudo mount "/dev/disk/by-id/$DISK_ID" $MOUNT_PATH
+
+# Add to fstab for persistent mounting
+echo "/dev/disk/by-id/$DISK_ID $MOUNT_PATH ext4 defaults,noatime 0 0" | sudo tee -a /etc/fstab
+
+# Verify
+df -h $MOUNT_PATH
+mount | grep $MOUNT_PATH
+#-----------------------------------------------
+Now install Longhorn
+
+helm repo add longhorn https://charts.longhorn.io
+helm repo update
+helm install longhorn longhorn/longhorn --namespace longhorn-system --create-namespace --version 1.10.0
+#------------------------------------------------
+
+#!/bin/bash
+# configure-longhorn-disks.sh
+
+echo "Configuring Longhorn to use only /mnt/longhorn-disk on all nodes..."
+
+# Configure each node
+for node in $(kubectl get nodes -o jsonpath='{.items[*].metadata.name}'); do
+  echo ""
+  echo "=== Configuring node: $node ==="
+  
+  # Step 1: Add the prepared disk at /mnt/longhorn-disk
+  echo "  Adding /mnt/longhorn-disk..."
+  kubectl -n longhorn-system patch nodes.longhorn.io $node --type='merge' -p='{
+    "spec": {
+      "disks": {
+        "longhorn-disk": {
+          "path": "/mnt/longhorn-disk",
+          "allowScheduling": true,
+          "tags": []
+        }
+      }
+    }
+  }'
+  
+  # Step 2: Find and disable the default disk at /var/lib/longhorn/
+  echo "  Finding and disabling default disk..."
+  default_disk=$(kubectl -n longhorn-system get nodes.longhorn.io $node -o json | \
+    jq -r '.spec.disks | to_entries[] | select(.value.path=="/var/lib/longhorn/") | .key')
+  
+  if [ ! -z "$default_disk" ]; then
+    echo "  Disabling default disk: $default_disk"
+    kubectl -n longhorn-system patch nodes.longhorn.io $node --type='json' -p='[{
+      "op": "replace",
+      "path": "/spec/disks/'$default_disk'/allowScheduling",
+      "value": false
+    }]'
+  fi
+done
+
+echo ""
+echo "=== Verification ==="
+for node in $(kubectl get nodes -o jsonpath='{.items[*].metadata.name}'); do
+  echo "Node: $node"
+  kubectl -n longhorn-system get nodes.longhorn.io $node -o json | \
+    jq -r '.spec.disks | to_entries[] | "  \(.value.path): schedulable=\(.value.allowScheduling)"'
+done
