@@ -6,10 +6,10 @@
 
 # VM Configuration
 declare -A VMS=(
-    ["100"]="c1-c:172.16.0.100:8192:4:no"      # Control plane: 8GB RAM, 4 CPU, no 2nd disk
+    #["100"]="c1-c:172.16.0.100:8192:4:no"      # Control plane: 8GB RAM, 4 CPU, no 2nd disk
     ["101"]="c1-w1:172.16.0.101:32768:8:yes"    # Worker 1: 32GB RAM, 8 CPU, 200GB 2nd disk
-    ["102"]="c1-w2:172.16.0.102:32768:8:yes"    # Worker 2: 32GB RAM, 8 CPU, 200GB 2nd disk
-    ["103"]="c1-w3:172.16.0.103:32768:8:yes"    # Worker 3: 32GB RAM, 8 CPU, 200GB 2nd disk
+    #["102"]="c1-w2:172.16.0.102:32768:8:yes"    # Worker 2: 32GB RAM, 8 CPU, 200GB 2nd disk
+    #["103"]="c1-w3:172.16.0.103:32768:8:yes"    # Worker 3: 32GB RAM, 8 CPU, 200GB 2nd disk
     
     # ["110"]="c2-c:172.16.0.110:8192:4:no"      # Control plane: 8GB RAM, 4 CPU, no 2nd disk
     # ["111"]="c2-w1:172.16.0.111:32768:8:yes"    # Worker 1: 32GB RAM, 8 CPU, 200GB 2nd disk
@@ -21,9 +21,10 @@ declare -A VMS=(
     # ["122"]="c3-w2:172.16.0.122:32768:8:yes"    # Worker 2: 32GB RAM, 8 CPU, 200GB 2nd disk
     # ["123"]="c3-w3:172.16.0.123:32768:8:yes"    # Worker 3: 32GB RAM, 8 CPU, 200GB 2nd disk
 )
+STORAGE_ID="vmdata"     # The storage ID we created earlier
+BRIDGE_ID="vmbr0"       # The private network bridge (172.16.0.1)
+CLOUD_IMAGE="/var/lib/vz/template/iso/debian-12-genericcloud-amd64.qcow2"
 
-CLOUD_IMAGE="/var/lib/vz/vms/template/iso/debian-12-generic-amd64.qcow2"
-# CLOUD_IMAGE="/var/lib/vz/vms/template/iso/debian-12-generic-amd64-ohmyzsh.qcow2"
 # Check if SSH keys exist
 
 if [[ ! -f /root/.ssh/id_ed25519.pub ]]; then
@@ -31,13 +32,13 @@ if [[ ! -f /root/.ssh/id_ed25519.pub ]]; then
     exit 1
 fi
 
-if [[ ! -f /root/SSH2 ]]; then
+if [[ ! -f /root/htz/mbpssh ]]; then
     echo "❌ SSH key not found at /root/SSH2"
     exit 1
 fi
 
 SSH_KEY1=$(cat /root/.ssh/id_ed25519.pub)
-SSH_KEY2=$(cat /root/SSH2)
+SSH_KEY2=$(cat /root/htz/mbpssh)
 
 # Function to create a single VM
 create_vm() {
@@ -137,7 +138,7 @@ EOF
 
     # Import disk
     echo "💾 Importing disk..."
-    qm importdisk $VM_ID "$CLOUD_IMAGE" local-vms
+    qm importdisk $VM_ID "$CLOUD_IMAGE" vmdata
 
     if [[ $? -ne 0 ]]; then
         echo "❌ Failed to import disk for VM $VM_ID"
@@ -146,8 +147,8 @@ EOF
 
     # Configure VM hardware
     echo "⚙️  Configuring VM hardware..."
-    qm set $VM_ID --scsi0 local-vms:$VM_ID/vm-$VM_ID-disk-0.raw
-    qm set $VM_ID --ide2 local-vms:cloudinit
+    qm set $VM_ID --scsi0 vmdata:$VM_ID/vm-$VM_ID-disk-0.raw
+    qm set $VM_ID --ide2 vmdata:cloudinit
     qm set $VM_ID --boot c --bootdisk scsi0
     qm set $VM_ID --agent enabled=1
     qm set $VM_ID --serial0 socket --vga serial0
@@ -159,7 +160,7 @@ EOF
     # Add second disk if required
     if [[ "$SECOND_DISK" == "yes" ]]; then
         echo "💾 Adding second SCSI disk (200GB)..."
-        qm set $VM_ID --scsi1 local-vms:200
+        qm set $VM_ID --scsi1 vmdata:200
         
         if [[ $? -eq 0 ]]; then
             echo "✅ Second disk (200GB) added as scsi1"
