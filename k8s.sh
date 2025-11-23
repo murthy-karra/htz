@@ -6,10 +6,10 @@
 
 # VM Configuration
 declare -A VMS=(
-    ["200"]="kvgk1-c:172.16.0.200:8192:4:no"      # Control plane: 8GB RAM, 4 CPU, no 2nd disk
-    ["201"]="kvgk1-w1:172.16.0.201:32768:8:yes"    # Worker 1: 32GB RAM, 8 CPU, 200GB 2nd disk
-    ["202"]="kvgk1-w2:172.16.0.202:32768:8:yes"    # Worker 2: 32GB RAM, 8 CPU, 200GB 2nd disk
-    ["203"]="kvgk1-w3:172.16.0.203:32768:8:yes"    # Worker 3: 32GB RAM, 8 CPU, 200GB 2nd disk
+    ["100"]="c1-c:172.16.0.100:16384:4:no"      # Control plane: 8GB RAM, 4 CPU, no 2nd disk
+    ["101"]="c1-w1:172.16.0.101:32768:8:yes"    # Worker 1: 32GB RAM, 8 CPU, 200GB 2nd disk
+    ["102"]="c1-w2:172.16.0.102:32768:8:yes"    # Worker 2: 32GB RAM, 8 CPU, 200GB 2nd disk
+    ["103"]="c1-w3:172.16.0.103:32768:8:yes"    # Worker 3: 32GB RAM, 8 CPU, 200GB 2nd disk
     
     # ["110"]="c2-c:172.16.0.110:8192:4:no"      # Control plane: 8GB RAM, 4 CPU, no 2nd disk
     # ["111"]="c2-w1:172.16.0.111:32768:8:yes"    # Worker 1: 32GB RAM, 8 CPU, 200GB 2nd disk
@@ -21,22 +21,24 @@ declare -A VMS=(
     # ["122"]="c3-w2:172.16.0.122:32768:8:yes"    # Worker 2: 32GB RAM, 8 CPU, 200GB 2nd disk
     # ["123"]="c3-w3:172.16.0.123:32768:8:yes"    # Worker 3: 32GB RAM, 8 CPU, 200GB 2nd disk
 )
-
-CLOUD_IMAGE="/var/lib/vz/vms/template/iso/debian-12-generic-amd64.qcow2"
+STORAGE_ID="vmdata"     # The storage ID we created earlier
+BRIDGE_ID="vmbr0"       # The private network bridge (172.16.0.1)
+CLOUD_IMAGE="/var/lib/vz/template/iso/debian-12-genericcloud-amd64.qcow2"
 
 # Check if SSH keys exist
+
 if [[ ! -f /root/.ssh/id_ed25519.pub ]]; then
     echo "❌ SSH key not found at /root/.ssh/id_ed25519.pub"
     exit 1
 fi
 
-if [[ ! -f /root/SSH2 ]]; then
+if [[ ! -f /root/htz/mbpssh ]]; then
     echo "❌ SSH key not found at /root/SSH2"
     exit 1
 fi
 
 SSH_KEY1=$(cat /root/.ssh/id_ed25519.pub)
-SSH_KEY2=$(cat /root/SSH2)
+SSH_KEY2=$(cat /root/htz/mbpssh)
 
 # Function to create a single VM
 create_vm() {
@@ -83,6 +85,7 @@ packages:
   - curl
   - gpg
   - htop
+  - zsh
 
 # System configuration
 ssh_pwauth: false
@@ -116,48 +119,61 @@ EOF
     qm stop $VM_ID 2>/dev/null && echo "   Stopped VM $VM_ID" || echo "   VM $VM_ID not running"
     qm destroy $VM_ID --purge 2>/dev/null && echo "   Destroyed VM $VM_ID" || echo "   VM $VM_ID doesn't exist"
 
-    # Create VM
+    # Create VM with minimal config
     echo "📦 Creating VM $VM_ID..."
     qm create $VM_ID \
         --name "$VM_NAME" \
-        --net0 virtio,bridge=vmbr0 \
-        --bootdisk scsi0 \
-        --ostype l26 \
         --memory $MEMORY \
         --balloon 0 \
         --cores $CORES \
-        --cpu cputype=host
+        --cpu cputype=host \
+        --net0 virtio,bridge=$BRIDGE_ID \
+        --scsihw virtio-scsi-pci \
+        --ostype l26
 
     if [[ $? -ne 0 ]]; then
         echo "❌ Failed to create VM $VM_ID"
         return 1
     fi
 
-    # Import disk
-    echo "💾 Importing disk..."
-    qm importdisk $VM_ID "$CLOUD_IMAGE" local-vms
-
+    # Import the cloud image disk
+    echo "💾 Importing cloud image disk..."
+    qm importdisk $VM_ID "$CLOUD_IMAGE" $STORAGE_ID
+    
     if [[ $? -ne 0 ]]; then
         echo "❌ Failed to import disk for VM $VM_ID"
         return 1
     fi
 
-    # Configure VM hardware
-    echo "⚙️  Configuring VM hardware..."
-    qm set $VM_ID --scsi0 local-vms:$VM_ID/vm-$VM_ID-disk-0.raw
-    qm set $VM_ID --ide2 local-vms:cloudinit
-    qm set $VM_ID --boot c --bootdisk scsi0
-    qm set $VM_ID --agent enabled=1
-    qm set $VM_ID --serial0 socket --vga serial0
+    # Find the imported disk
+    sleep 2
+    DISK_PATH=$(pvesm list $STORAGE_ID | grep "vm-${VM_ID}-disk-0" | awk '{print $1}' | sed "s|${STORAGE_ID}:||")
+    
+    if [[ -z "$DISK_PATH" ]]; then
+        echo "❌ Could not find imported disk for VM $VM_ID"
+        pvesm list $STORAGE_ID | grep "vm-${VM_ID}"
+        return 1
+    fi
+    
+    echo "   Found disk: $DISK_PATH"
 
-    # Resize disk to 50GB
-    echo "📏 Resizing first disk to 50GB..."
-    qm resize $VM_ID scsi0 +47G
+    # Attach the imported disk as scsi0
+    echo "⚙️  Attaching boot disk..."
+    qm set $VM_ID --scsi0 ${STORAGE_ID}:${DISK_PATH}
+    
+    if [[ $? -ne 0 ]]; then
+        echo "❌ Failed to attach boot disk"
+        return 1
+    fi
+
+    # Resize the boot disk to 50GB
+    echo "📏 Resizing boot disk to 50GB..."
+    qm resize $VM_ID scsi0 50G
 
     # Add second disk if required
     if [[ "$SECOND_DISK" == "yes" ]]; then
         echo "💾 Adding second SCSI disk (200GB)..."
-        qm set $VM_ID --scsi1 local-vms:100
+        qm set $VM_ID --scsi1 ${STORAGE_ID}:200
         
         if [[ $? -eq 0 ]]; then
             echo "✅ Second disk (200GB) added as scsi1"
@@ -167,11 +183,33 @@ EOF
         fi
     fi
 
-    # Apply cloud-init configuration
-    echo "☁️  Applying cloud-init configuration..."
-    qm set $VM_ID --cicustom "user=local:snippets/vm-${VM_ID}-user-data.yaml"
+    # Add cloud-init drive
+    echo "☁️  Adding cloud-init drive..."
+    qm set $VM_ID --ide2 ${STORAGE_ID}:cloudinit
+    
+    # Configure boot
+    echo "⚙️  Configuring boot settings..."
+    qm set $VM_ID --boot order=scsi0
+    qm set $VM_ID --bootdisk scsi0
+    
+    # Configure serial console
+    qm set $VM_ID --serial0 socket --vga serial0
+    
+    # Apply cloud-init network configuration
+    echo "🌐 Configuring network..."
     qm set $VM_ID --ipconfig0 ip=${IP_ADDRESS}/24,gw=172.16.0.1
     qm set $VM_ID --nameserver 8.8.8.8
+    qm set $VM_ID --searchdomain tarams.org
+    
+    # Apply custom cloud-init user-data
+    qm set $VM_ID --cicustom "user=local:snippets/vm-${VM_ID}-user-data.yaml"
+    
+    # Enable qemu-guest-agent
+    qm set $VM_ID --agent enabled=1
+
+    # Verify configuration
+    echo "🔍 Verifying VM configuration..."
+    qm config $VM_ID | grep -E "^(scsi0|scsi1|boot|net0|ipconfig):"
 
     # Start VM
     echo "🚀 Starting VM $VM_ID..."
@@ -194,12 +232,7 @@ EOF
 # Main execution
 echo "🏗️  Multi-VM Creation Script"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Creating 5 VMs with different configurations:"
-echo "  c1  (101): Control plane - 8GB RAM, 4 CPU"
-echo "  w1  (102): Worker 1 - 32GB RAM, 8 CPU + 200GB disk"
-echo "  w2  (103): Worker 2 - 32GB RAM, 8 CPU + 200GB disk"
-echo "  w3  (104): Worker 3 - 32GB RAM, 8 CPU + 200GB disk"
-echo "  ha  (105): HA Proxy - 8GB RAM, 2 CPU"
+echo "Creating VMs with different configurations"
 echo ""
 
 # Create all VMs
@@ -244,18 +277,10 @@ if [[ ${#FAILED_VMS[@]} -gt 0 ]]; then
 fi
 
 echo ""
-echo "🔗 SSH Access Commands:"
-echo "   ssh debian@172.16.0.10  # c1 (control plane)"
-echo "   ssh debian@172.16.0.11  # w1 (worker 1)"
-echo "   ssh debian@172.16.0.12  # w2 (worker 2)"
-echo "   ssh debian@172.16.0.13  # w3 (worker 3)"
-echo "   ssh debian@172.16.0.14  # ha (ha proxy)"
+echo "⏱️  Wait 3-5 minutes for cloud-init to complete..."
+echo "🧪 Test connectivity with: ssh debian@<IP>"
 echo ""
-echo "⏱️  Wait 3-5 minutes for cloud-init to complete on all VMs..."
-echo "🧪 Test connectivity: ping 172.16.0.10-14"
-echo ""
-echo "💾 VMs with second disk (w1, w2, w3):"
-echo "   Second disk will appear as /dev/sdb (200GB, unformatted)"
+echo "💾 VMs with second disk will have /dev/sdb (200GB, unformatted)"
 echo "   Use 'lsblk' inside the VM to see all disks"
 
 if [[ ${#FAILED_VMS[@]} -eq 0 ]]; then
