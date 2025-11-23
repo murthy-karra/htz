@@ -1,0 +1,5 @@
+ansible>=9.0.0
+ansible-core>=2.16.0
+jmespath
+netaddr
+ansible-lint
