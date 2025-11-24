@@ -2,7 +2,7 @@
 
 
 
-sudo kubeadm init --apiserver-advertise-address=172.16.0.20 \
+sudo kubeadm init --apiserver-advertise-address=172.16.0.100 \
      --apiserver-cert-extra-sans=k8s1.tarams.local \
      --pod-network-cidr=192.168.0.0/16 \
      --service-cidr=10.96.0.0/12 \
@@ -10,8 +10,8 @@ sudo kubeadm init --apiserver-advertise-address=172.16.0.20 \
 ----------------------------------------------------------------
 
 
-sudo kubeadm join 172.16.0.10:6443 --token 5z36f5.5ykc0p108iv54vw2 \
-	--discovery-token-ca-cert-hash sha256:cec2e8bbab6e29ff85d92111cb1a1e8e5209107e440331e61881963acd45ec2c
+sudo kubeadm join 172.16.0.100:6443 --token 7us8bu.3i5orzxjl0pe8ifv \
+	--discovery-token-ca-cert-hash sha256:0401aa15fc0d378f6f96e7980899697c4537ec24f45fc4d1271f92cd8ec08a92
 
 #-----------------------------------------------------------------------------------------------------------------
 # Calico
