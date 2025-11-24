@@ -31,6 +31,9 @@ for disk in /dev/disk/by-id/ata-* /dev/disk/by-id/scsi-*; do
 done
 #--------------------------------------------
 # Example: if your blank disk ID is ata-VBOX_HARDDISK_VB12345678-1234
+
+# You can also use ansible playbook setup_longhorn_disks.yml but need diskid
+
 DISK_ID="scsi-0QEMU_QEMU_HARDDISK_drive-scsi1"  # Replace with your actual disk ID
 MOUNT_PATH="/mnt/longhorn-disk"
 

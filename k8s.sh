@@ -6,10 +6,10 @@
 
 # VM Configuration
 declare -A VMS=(
-    ["200"]="haproxy:172.16.0.200:16384:4:no"      # Control plane: 8GB RAM, 4 CPU, no 2nd disk
-    #["101"]="c1-w1:172.16.0.101:32768:8:yes"    # Worker 1: 32GB RAM, 8 CPU, 200GB 2nd disk
-    #["102"]="c1-w2:172.16.0.102:32768:8:yes"    # Worker 2: 32GB RAM, 8 CPU, 200GB 2nd disk
-    #["103"]="c1-w3:172.16.0.103:32768:8:yes"    # Worker 3: 32GB RAM, 8 CPU, 200GB 2nd disk
+    ["100"]="haproxy:172.16.0.100:16384:4:no"      # Control plane: 8GB RAM, 4 CPU, no 2nd disk
+    ["101"]="c1-w1:172.16.0.101:32768:8:yes"    # Worker 1: 32GB RAM, 8 CPU, 200GB 2nd disk
+    ["102"]="c1-w2:172.16.0.102:32768:8:yes"    # Worker 2: 32GB RAM, 8 CPU, 200GB 2nd disk
+    ["103"]="c1-w3:172.16.0.103:32768:8:yes"    # Worker 3: 32GB RAM, 8 CPU, 200GB 2nd disk
     
     # ["110"]="c2-c:172.16.0.110:8192:4:no"      # Control plane: 8GB RAM, 4 CPU, no 2nd disk
     # ["111"]="c2-w1:172.16.0.111:32768:8:yes"    # Worker 1: 32GB RAM, 8 CPU, 200GB 2nd disk

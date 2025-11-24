@@ -1,0 +1,43 @@
+---
+- name: Configure Longhorn Disk
+  hosts: k8s_workers
+  become: true  # Replaces 'sudo'
+  vars:
+    # Configuration variables
+    disk_id: "scsi-0QEMU_QEMU_HARDDISK_drive-scsi1"
+    mount_path: "/mnt/longhorn-disk"
+    disk_device: "/dev/disk/by-id/{{ disk_id }}"
+
+  tasks:
+    - name: Create ext4 filesystem on the disk
+      community.general.filesystem:
+        fstype: ext4
+        dev: "{{ disk_device }}"
+        opts: "-L longhorn-data"
+        # force: no is default (won't wipe if already ext4)
+        
+    - name: Create mount point directory
+      ansible.builtin.file:
+        path: "{{ mount_path }}"
+        state: directory
+        mode: '0755'
+
+    - name: Mount the disk and add to /etc/fstab
+      ansible.builtin.mount:
+        path: "{{ mount_path }}"
+        src: "{{ disk_device }}"
+        fstype: ext4
+        opts: defaults,noatime
+        dump: '0'
+        passno: '0'
+        state: mounted
+      register: mount_status
+
+    - name: Verify disk usage (Optional)
+      ansible.builtin.command: "df -h {{ mount_path }}"
+      register: df_output
+      changed_when: false
+
+    - name: Display verification info
+      ansible.builtin.debug:
+        msg: "{{ df_output.stdout_lines }}"

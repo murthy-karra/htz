@@ -3,3 +3,5 @@ ansible-core>=2.16.0
 jmespath
 netaddr
 ansible-lint
+kubernetes 
+pyyaml

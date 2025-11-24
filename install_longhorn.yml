@@ -1,0 +1,230 @@
+---
+- name: Install and Configure Longhorn for Worker Nodes Only
+  hosts: localhost
+  gather_facts: yes
+  vars:
+    kubeconfig_path: "{{ ansible_env.HOME }}/.kube/c1"
+    longhorn_namespace: "longhorn-system"
+    longhorn_disk_path: "/mnt/longhorn-disk"
+    longhorn_version: "1.10.1"
+  
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
+  
+  tasks:
+    - name: Add Longhorn Helm repository
+      command: helm repo add longhorn https://charts.longhorn.io
+      register: helm_add
+      failed_when: 
+        - helm_add.rc != 0
+        - "'already exists' not in helm_add.stderr"
+      changed_when: "'already exists' not in helm_add.stderr"
+
+    - name: Update Helm repositories
+      command: helm repo update
+      changed_when: false
+
+    - name: Create Longhorn values file
+      copy:
+        content: |
+          defaultSettings:
+            createDefaultDiskLabeledNodes: false
+            defaultDataPath: {{ longhorn_disk_path }}
+            storageMinimalAvailablePercentage: 10
+            
+          longhornManager:
+            nodeSelector:
+              node-role.kubernetes.io/control-plane: null
+            tolerations: []
+          
+          longhornDriver:
+            nodeSelector:
+              node-role.kubernetes.io/control-plane: null
+            tolerations: []
+          
+          longhornUI:
+            nodeSelector:
+              node-role.kubernetes.io/control-plane: null
+        dest: /tmp/longhorn-values.yaml
+        mode: '0644'
+
+    - name: Install Longhorn via Helm
+      command: >
+        helm upgrade --install longhorn longhorn/longhorn
+        --namespace {{ longhorn_namespace }}
+        --create-namespace
+        --version {{ longhorn_version }}
+        --values /tmp/longhorn-values.yaml
+      register: helm_install
+      changed_when: "'has been upgraded' in helm_install.stdout or 'has been installed' in helm_install.stdout"
+
+    - name: Wait for Longhorn manager to be ready
+      command: >
+        kubectl rollout status deployment/longhorn-driver-deployer
+        -n {{ longhorn_namespace }}
+        --timeout=300s
+      changed_when: false
+
+    - name: Wait for Longhorn nodes to be created
+      pause:
+        seconds: 30
+        prompt: "Waiting for Longhorn to initialize nodes..."
+
+    - name: Get worker nodes only
+      shell: |
+        kubectl get nodes -o json | \
+        jq -r '.items[] | select(.spec.taints == null or (.spec.taints | map(select(.key == "node-role.kubernetes.io/control-plane")) | length == 0)) | .metadata.name'
+      register: worker_nodes
+      changed_when: false
+
+    - name: Display worker nodes found
+      debug:
+        msg: "Worker nodes: {{ worker_nodes.stdout_lines }}"
+
+    - name: Enable scheduling on worker nodes and configure disk
+      shell: |
+        set -e
+        NODE="{{ item }}"
+        
+        echo "Configuring worker node: $NODE"
+        
+        # Enable scheduling on this node
+        kubectl -n {{ longhorn_namespace }} patch nodes.longhorn.io $NODE --type='merge' -p='{
+          "spec": {
+            "allowScheduling": true,
+            "disks": {
+              "longhorn-disk": {
+                "path": "{{ longhorn_disk_path }}",
+                "allowScheduling": true,
+                "storageReserved": 0,
+                "tags": []
+              }
+            }
+          }
+        }'
+        
+        # Find and disable any default disks
+        DEFAULT_DISKS=$(kubectl -n {{ longhorn_namespace }} get nodes.longhorn.io $NODE -o json | \
+          jq -r '.spec.disks | to_entries[] | select(.value.path != "{{ longhorn_disk_path }}") | .key')
+        
+        for DISK in $DEFAULT_DISKS; do
+          if [ ! -z "$DISK" ]; then
+            echo "  Disabling default disk: $DISK"
+            kubectl -n {{ longhorn_namespace }} patch nodes.longhorn.io $NODE --type='json' -p='[{
+              "op": "replace",
+              "path": "/spec/disks/'$DISK'/allowScheduling",
+              "value": false
+            }]'
+          fi
+        done
+      loop: "{{ worker_nodes.stdout_lines }}"
+      when: worker_nodes.stdout_lines | length > 0
+
+    - name: Get control plane nodes
+      shell: |
+        kubectl get nodes -o json | \
+        jq -r '.items[] | select(.spec.taints != null and (.spec.taints | map(select(.key == "node-role.kubernetes.io/control-plane")) | length > 0)) | .metadata.name'
+      register: control_nodes
+      changed_when: false
+
+    - name: Display control plane nodes found
+      debug:
+        msg: "Control plane nodes: {{ control_nodes.stdout_lines }}"
+      when: control_nodes.stdout_lines | length > 0
+
+    - name: Disable scheduling on control plane nodes
+      shell: |
+        set -e
+        NODE="{{ item }}"
+        
+        echo "Disabling scheduling on control plane node: $NODE"
+        
+        # Check if Longhorn node exists
+        if kubectl -n {{ longhorn_namespace }} get nodes.longhorn.io $NODE >/dev/null 2>&1; then
+          # Disable node scheduling
+          kubectl -n {{ longhorn_namespace }} patch nodes.longhorn.io $NODE --type='merge' -p='{
+            "spec": {
+              "allowScheduling": false
+            }
+          }'
+          
+          # Disable all disks on this node
+          ALL_DISKS=$(kubectl -n {{ longhorn_namespace }} get nodes.longhorn.io $NODE -o json | \
+            jq -r '.spec.disks | keys[]')
+          
+          for DISK in $ALL_DISKS; do
+            if [ ! -z "$DISK" ]; then
+              echo "  Disabling disk on control plane: $DISK"
+              kubectl -n {{ longhorn_namespace }} patch nodes.longhorn.io $NODE --type='json' -p='[{
+                "op": "replace",
+                "path": "/spec/disks/'$DISK'/allowScheduling",
+                "value": false
+              }]'
+            fi
+          done
+        else
+          echo "  Longhorn node $NODE not found (expected for control plane)"
+        fi
+      loop: "{{ control_nodes.stdout_lines }}"
+      when: control_nodes.stdout_lines | length > 0
+      ignore_errors: yes
+
+    - name: Wait for configuration to settle
+      pause:
+        seconds: 10
+
+    - name: Verify configuration on all nodes
+      shell: |
+        echo "=== Longhorn Node Configuration ==="
+        for NODE in $(kubectl -n {{ longhorn_namespace }} get nodes.longhorn.io -o jsonpath='{.items[*].metadata.name}'); do
+          echo ""
+          echo "Node: $NODE"
+          kubectl -n {{ longhorn_namespace }} get nodes.longhorn.io $NODE -o json | \
+            jq -r '
+              "  Node Scheduling: \(.spec.allowScheduling)",
+              "  Disks:",
+              (.spec.disks | to_entries[] | "    \(.key): path=\(.value.path), schedulable=\(.value.allowScheduling)")
+            '
+        done
+      register: verification
+      changed_when: false
+
+    - name: Display verification results
+      debug:
+        msg: "{{ verification.stdout_lines }}"
+
+    - name: Create default StorageClass
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: longhorn
+            annotations:
+              storageclass.kubernetes.io/is-default-class: "true"
+          provisioner: driver.longhorn.io
+          allowVolumeExpansion: true
+          reclaimPolicy: Delete
+          volumeBindingMode: Immediate
+          parameters:
+            numberOfReplicas: "3"
+            staleReplicaTimeout: "2880"
+            fromBackup: ""
+            fsType: "ext4"
+
+    - name: Display Longhorn UI access information
+      debug:
+        msg: |
+          ========================================
+          Longhorn Installation Complete!
+          ========================================
+          
+          To access the Longhorn UI, run:
+          kubectl -n {{ longhorn_namespace }} port-forward service/longhorn-frontend 8080:80
+          
+          Then open: http://localhost:8080
+          
+          Worker nodes configured: {{ worker_nodes.stdout_lines | length }}
+          Control plane nodes excluded: {{ control_nodes.stdout_lines | length }}
